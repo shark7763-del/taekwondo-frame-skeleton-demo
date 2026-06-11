@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Taekwondo AI Coach - Frame Skeleton Demo</title>
+<!--
+  Taekwondo AI Coach - Frame Skeleton Demo
+  跆拳道橫踢「逐 frame 骨架分析」Demo
+  - 上傳本地影片 → 逐 frame 取得人體 33 點骨架 → 疊在影片上 → 記錄每張 frame 的骨架資料
+  - 純 HTML + CSS + 原生 JS（type="module" 仍屬原生 JS，無框架/打包工具/後端）
+  - MediaPipe Tasks Vision「PoseLandmarker」做骨架偵測；載入失敗會自動進 Demo 模式
+  - 直接用瀏覽器打開 index.html 即可執行（建議 Chrome/Edge，影片匯出需支援 MediaRecorder）
+-->
+<style>
+  /* ============== 深色科技感 / 手機優先 ============== */
+  :root{
+    --bg:#070d18; --card:#0f1c30; --line:rgba(94,180,255,.22);
+    --text:#eef5ff; --muted:#9fb3c8; --cyan:#5be6ff; --blue:#4cc9f0;
+    --green:#46e6a8; --yellow:#ffd166; --red:#ff5d6c; --purple:#a472ff;
+    --radius:16px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--text);
+    font-family:"Noto Sans TC","Microsoft JhengHei",system-ui,Arial,sans-serif;
+    background:
+      radial-gradient(1100px 500px at 10% -10%, rgba(76,201,240,.18), transparent 60%),
+      radial-gradient(900px 500px at 110% 0%, rgba(164,114,255,.16), transparent 55%),
+      linear-gradient(180deg,#05080f,var(--bg));
+    min-height:100vh;
+  }
+  .wrap{width:min(1180px,100%); margin:0 auto; padding:16px;}
+  header.hero{padding:18px 6px 8px;}
+  .badge{
+    display:inline-flex; gap:8px; align-items:center; font-size:13px; letter-spacing:.4px;
+    color:var(--cyan); border:1px solid var(--line); background:rgba(91,230,255,.08);
+    border-radius:999px; padding:7px 12px;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 14px var(--green)}
+  h1{margin:12px 0 4px; font-size:clamp(26px,5.5vw,44px); letter-spacing:-1px;}
+  .sub{margin:0;color:var(--muted);font-size:15px}
+
+  .grid{display:grid; grid-template-columns:1fr; gap:14px; margin-top:14px;}
+  .card{background:linear-gradient(180deg,var(--card),#0a1626);
+        border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+  .card .hd{padding:13px 15px;border-bottom:1px solid var(--line);
+        display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .card .hd h2{margin:0;font-size:16px}
+  .card .bd{padding:14px}
+
+  .pill{font-size:12px;padding:5px 10px;border-radius:999px;white-space:nowrap;
+        border:1px solid var(--line);color:var(--muted);background:rgba(255,255,255,.04)}
+  .pill.ok{color:var(--green);border-color:rgba(70,230,168,.4);background:rgba(70,230,168,.08)}
+  .pill.warn{color:var(--yellow);border-color:rgba(255,209,102,.4);background:rgba(255,209,102,.08)}
+  .pill.bad{color:var(--red);border-color:rgba(255,93,108,.4);background:rgba(255,93,108,.08)}
+
+  /* ============== 影片 + 骨架疊加 ============== */
+  .stage{position:relative; width:100%; background:#03070e; border-radius:12px; overflow:hidden;
+         min-height:220px; display:flex; align-items:center; justify-content:center}
+  video{width:100%; display:block; max-height:64vh}
+  canvas#overlay{position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none}
+  .empty-stage{color:var(--muted); padding:40px 16px; text-align:center; font-size:14px}
+
+  .controls{display:flex; flex-wrap:wrap; gap:10px; margin-top:12px}
+  .file-btn,button.btn{
+    border:none; border-radius:12px; padding:12px 14px; font-weight:800; font-size:14px;
+    cursor:pointer; color:#05101d; transition:filter .15s, transform .1s;
+  }
+  button.btn:active{transform:scale(.98)}
+  button.btn:hover{filter:brightness(1.08)}
+  button.btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.3)}
+  .file-btn{background:linear-gradient(135deg,var(--cyan),var(--blue));display:inline-flex;align-items:center}
+  .btn-green{background:linear-gradient(135deg,var(--green),#88ffd0)}
+  .btn-yellow{background:linear-gradient(135deg,var(--yellow),#ffb703)}
+  .btn-purple{background:linear-gradient(135deg,var(--purple),#c9a6ff)}
+  input[type=file]{display:none}
+
+  .fps-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+  .fps-row label{font-size:13px;color:var(--muted)}
+  .fps-row input{width:90px;background:#0b1726;border:1px solid var(--line);border-radius:10px;
+        color:var(--text);padding:9px 10px;font-size:14px}
+
+  /* ============== 統計列 ============== */
+  .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}
+  .stat{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;padding:11px 12px}
+  .stat .k{font-size:12px;color:var(--muted)}
+  .stat .v{font-size:20px;font-weight:900;color:var(--cyan);margin-top:3px;font-variant-numeric:tabular-nums}
+
+  /* ============== 骨架資料面板 ============== */
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px}
+  .kv .k{color:var(--muted)}
+  .kv .v{color:var(--text);font-variant-numeric:tabular-nums}
+  .coord{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#cfe6ff}
+  .issues{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .issue-tag{font-size:13px;font-weight:800;color:#fff;background:linear-gradient(135deg,#ff5d6c,#ff8a5b);
+        padding:7px 11px;border-radius:10px;box-shadow:0 6px 18px rgba(255,93,108,.25)}
+  .good-tag{font-size:13px;font-weight:800;color:#05101d;background:linear-gradient(135deg,var(--green),#88ffd0);
+        padding:7px 11px;border-radius:10px}
+  .note{color:var(--muted);font-size:12px;line-height:1.6;margin-top:10px;
+        border-top:1px dashed var(--line);padding-top:10px}
+  footer{color:var(--muted);text-align:center;font-size:12px;padding:18px 8px}
+
+  @media(min-width:920px){
+    .grid{grid-template-columns:1.25fr .9fr; align-items:start}
+    .stats{grid-template-columns:repeat(4,1fr)}
+    .col-span{grid-column:1 / -1}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <span class="badge"><span class="dot"></span> Frame Skeleton Demo · MediaPipe Pose</span>
+    <h1>Taekwondo AI Coach</h1>
+    <p class="sub">跆拳道橫踢 — 逐 frame 骨架分析（上傳影片 · 33 點骨架 · 每張 frame 記錄）</p>
+  </header>
+
+  <div class="grid">
+    <!-- 左：影片 + 骨架 -->
+    <section class="card">
+      <div class="hd">
+        <h2>影片分析區</h2>
+        <span class="pill warn" id="mpStatus">AI 模型載入中…</span>
+      </div>
+      <div class="bd">
+        <div class="stage" id="stage">
+          <div class="empty-stage" id="emptyStage">尚未上傳影片。請點下方「上傳影片」選一支 mp4 / webm。</div>
+          <video id="video" playsinline controls preload="metadata" style="display:none"></video>
+          <canvas id="overlay"></canvas>
+        </div>
+
+        <div class="controls">
+          <label class="file-btn">上傳影片
+            <input type="file" id="fileInput" accept="video/mp4,video/webm,video/*" />
+          </label>
+          <button class="btn btn-green" id="exportJsonBtn" disabled>匯出骨架 JSON</button>
+          <button class="btn btn-yellow" id="exportVideoBtn" disabled>匯出帶骨架影片</button>
+          <button class="btn btn-purple" id="demoToggleBtn">切換 Demo 骨架</button>
+        </div>
+
+        <div class="fps-row">
+          <label>FPS（每秒影格數）</label>
+          <input type="number" id="fpsInput" value="30" min="1" max="120" step="1" />
+          <span class="pill" id="recPill">已記錄 0 frames</span>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">影片時間</div><div class="v" id="stTime">0.00s</div></div>
+          <div class="stat"><div class="k">FPS</div><div class="v" id="stFps">30</div></div>
+          <div class="stat"><div class="k">目前 Frame</div><div class="v" id="stFrame">000000</div></div>
+          <div class="stat"><div class="k">預估總 Frame</div><div class="v" id="stTotal">0</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右：目前 frame 骨架資料 -->
+    <section class="card">
+      <div class="hd">
+        <h2>目前 Frame 骨架資料</h2>
+        <span class="pill" id="detectPill">尚未偵測</span>
+      </div>
+      <div class="bd">
+        <div class="kv">
+          <div class="k">Frame index</div><div class="v" id="dFrame">—</div>
+          <div class="k">時間 time</div><div class="v" id="dTime">—</div>
+          <div class="k">偵測關鍵點</div><div class="v" id="dCount">—</div>
+        </div>
+
+        <div class="note" style="border-top:none;padding-top:6px">下肢座標（normalized 0–1）</div>
+        <div class="kv">
+          <div class="k">左髖 L-Hip</div><div class="v coord" id="dLHip">—</div>
+          <div class="k">左膝 L-Knee</div><div class="v coord" id="dLKnee">—</div>
+          <div class="k">左踝 L-Ankle</div><div class="v coord" id="dLAnkle">—</div>
+          <div class="k">右髖 R-Hip</div><div class="v coord" id="dRHip">—</div>
+          <div class="k">右膝 R-Knee</div><div class="v coord" id="dRKnee">—</div>
+          <div class="k">右踝 R-Ankle</div><div class="v coord" id="dRAnkle">—</div>
+        </div>
+
+        <div class="note" style="border-top:none;padding-top:10px">角度（度）</div>
+        <div class="kv">
+          <div class="k">左膝角度</div><div class="v" id="aLKnee">—</div>
+          <div class="k">右膝角度</div><div class="v" id="aRKnee">—</div>
+          <div class="k">左髖角度</div><div class="v" id="aLHip">—</div>
+          <div class="k">右髖角度</div><div class="v" id="aRHip">—</div>
+          <div class="k">軀幹傾斜</div><div class="v" id="aTrunk">—</div>
+        </div>
+
+        <div class="note" style="border-top:none;padding-top:10px">橫踢問題標籤（第一版為示意規則）</div>
+        <div class="issues" id="issueBox"><span class="good-tag">尚無資料</span></div>
+
+        <div class="note">
+          說明：每一張 frame 的骨架點都會存進 <b>frameDataList</b>。「匯出骨架 JSON」可把整支影片的逐 frame 骨架帶走，
+          供下一版做橫踢評分（收膝高度、髖部旋轉、膝蓋伸展、支撐腳旋轉、身體平衡、收腳速度）。
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer>純前端 Demo · 骨架運算只在你的瀏覽器本機進行，不上傳 · 建議用桌機 Chrome/Edge 取得最佳偵測與匯出</footer>
+</div>
+
+<script type="module">
+/* =====================================================================
+   全部邏輯放在單一 module（仍是原生 JS）。module script 預設 defer，
+   執行時 DOM 已就緒。
+===================================================================== */
+
+/* ---------- DOM ---------- */
+const video       = document.getElementById("video");
+const overlay     = document.getElementById("overlay");
+const ctx         = overlay.getContext("2d");
+const stage       = document.getElementById("stage");
+const emptyStage  = document.getElementById("emptyStage");
+const fileInput   = document.getElementById("fileInput");
+const fpsInput    = document.getElementById("fpsInput");
+const mpStatus    = document.getElementById("mpStatus");
+const detectPill  = document.getElementById("detectPill");
+const recPill     = document.getElementById("recPill");
+const exportJsonBtn  = document.getElementById("exportJsonBtn");
+const exportVideoBtn = document.getElementById("exportVideoBtn");
+const demoToggleBtn  = document.getElementById("demoToggleBtn");
+
+const stTime = document.getElementById("stTime");
+const stFps  = document.getElementById("stFps");
+const stFrame= document.getElementById("stFrame");
+const stTotal= document.getElementById("stTotal");
+
+const dFrame=document.getElementById("dFrame"), dTime=document.getElementById("dTime"), dCount=document.getElementById("dCount");
+const dLHip=document.getElementById("dLHip"), dLKnee=document.getElementById("dLKnee"), dLAnkle=document.getElementById("dLAnkle");
+const dRHip=document.getElementById("dRHip"), dRKnee=document.getElementById("dRKnee"), dRAnkle=document.getElementById("dRAnkle");
+const aLKnee=document.getElementById("aLKnee"), aRKnee=document.getElementById("aRKnee");
+const aLHip=document.getElementById("aLHip"), aRHip=document.getElementById("aRHip"), aTrunk=document.getElementById("aTrunk");
+const issueBox=document.getElementById("issueBox");
+
+/* ---------- 常數 ---------- */
+// MediaPipe Pose 33 點名稱（BlazePose 標準）
+const LM_NAMES = [
+  "nose","left_eye_inner","left_eye","left_eye_outer","right_eye_inner","right_eye","right_eye_outer",
+  "left_ear","right_ear","mouth_left","mouth_right",
+  "left_shoulder","right_shoulder","left_elbow","right_elbow","left_wrist","right_wrist",
+  "left_pinky","right_pinky","left_index","right_index","left_thumb","right_thumb",
+  "left_hip","right_hip","left_knee","right_knee","left_ankle","right_ankle",
+  "left_heel","right_heel","left_foot_index","right_foot_index"
+];
+// 關鍵點索引
+const I = { nose:0, shL:11, shR:12, elL:13, elR:14, wrL:15, wrR:16,
+            hipL:23, hipR:24, kneeL:25, kneeR:26, ankL:27, ankR:28,
+            heelL:29, heelR:30, footL:31, footR:32 };
+// 骨架連線（重點：左右肩、左右髖、左右膝、左右腳踝 + 四肢）
+const POSE_CONNECTIONS = [
+  [I.shL,I.shR],[I.shL,I.elL],[I.elL,I.wrL],[I.shR,I.elR],[I.elR,I.wrR], // 肩 + 手臂
+  [I.shL,I.hipL],[I.shR,I.hipR],[I.hipL,I.hipR],                         // 軀幹 + 髖連線
+  [I.hipL,I.kneeL],[I.kneeL,I.ankL],[I.ankL,I.heelL],[I.heelL,I.footL],[I.ankL,I.footL], // 左腿
+  [I.hipR,I.kneeR],[I.kneeR,I.ankR],[I.ankR,I.heelR],[I.heelR,I.footR],[I.ankR,I.footR], // 右腿
+  [I.nose,I.shL],[I.nose,I.shR]                                          // 頭→肩（粗略）
+];
+
+/* ---------- 狀態 ---------- */
+let fps = 30;
+let landmarker = null;       // MediaPipe PoseLandmarker
+let mpReady = false;         // 模型是否成功載入
+let demoMode = false;        // 真實偵測失敗 → Demo 假骨架
+let forceDemo = false;       // 使用者手動切換 Demo
+let lastTs = 0;              // detectForVideo 需嚴格遞增的時間戳
+let bakeVideo = false;       // 匯出影片時：把影片畫面也烤進 canvas
+let rafId = 0;
+let hasRVFC = ("requestVideoFrameCallback" in HTMLVideoElement.prototype);
+
+let frameDataList = [];      // 每張 frame 一筆（核心資料）
+let lastRecordedIndex = -1;  // 連續播放避免同一 frame 重複記錄
+let currentLandmarks = null;
+let currentIssues = [];
+let videoName = "";
+
+/* ---------- 小工具 ---------- */
+const round = (v, d=4) => (v==null||isNaN(v)) ? null : Math.round(v*10**d)/10**d;
+const pad6  = n => String(n).padStart(6,"0");
+function setMpStatus(state, text){
+  mpStatus.className = "pill " + state;
+  mpStatus.textContent = text;
+}
+
+/* =====================================================================
+   1) 初始化 MediaPipe Tasks Vision PoseLandmarker（VIDEO 模式）
+      載入失敗 → 進 Demo 模式，不讓頁面壞掉
+===================================================================== */
+async function initMediaPipe(){
+  try{
+    const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+    const { PoseLandmarker, FilesetResolver } = vision;
+    const fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    const modelUrl = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+    const makeOpts = (delegate) => ({
+      baseOptions:{ modelAssetPath: modelUrl, delegate },
+      runningMode:"VIDEO", numPoses:1, minPoseDetectionConfidence:0.5, minTrackingConfidence:0.5
+    });
+    try {
+      landmarker = await PoseLandmarker.createFromOptions(fileset, makeOpts("GPU"));
+    } catch(gpuErr){
+      console.warn("GPU delegate 失敗，改用 CPU：", gpuErr);
+      landmarker = await PoseLandmarker.createFromOptions(fileset, makeOpts("CPU"));
+    }
+    mpReady = true; demoMode = false;
+    setMpStatus("ok", "AI 模型已就緒（真實偵測）");
+  }catch(err){
+    console.error("MediaPipe 載入失敗，進入 Demo 模式：", err);
+    mpReady = false; demoMode = true;
+    setMpStatus("bad", "模型載入失敗 · Demo 模式");
+  }
+}
+initMediaPipe();
+
+/* =====================================================================
+   2) 上傳影片
+===================================================================== */
+fileInput.addEventListener("change", (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  videoName = file.name;
+  const url = URL.createObjectURL(file);
+  video.src = url;
+  video.style.display = "block";
+  emptyStage.style.display = "none";
+  // 重置紀錄
+  frameDataList = []; lastRecordedIndex = -1; lastTs = 0;
+  updateRecPill();
+});
+
+// 影片中繼資料載入：設定 canvas 解析度 = 影片實際畫素，更新總 frame 數
+video.addEventListener("loadedmetadata", ()=>{
+  overlay.width  = video.videoWidth  || 640;
+  overlay.height = video.videoHeight || 360;
+  stTotal.textContent = Math.floor((video.duration||0) * fps);
+  exportJsonBtn.disabled = false;
+  exportVideoBtn.disabled = false;
+  renderOnce();  // 先畫第一張
+});
+
+/* =====================================================================
+   3) Frame index 計算 + 逐 frame 處理
+      - 優先 requestVideoFrameCallback（取得實際 frame 更新）
+      - 不支援則用 currentTime * fps 估算（rAF 迴圈）
+===================================================================== */
+fpsInput.addEventListener("change", ()=>{
+  fps = Math.max(1, Math.min(120, parseInt(fpsInput.value)||30));
+  fpsInput.value = fps;
+  stFps.textContent = fps;
+  stTotal.textContent = Math.floor((video.duration||0) * fps);
+});
+
+// 播放時啟動偵測迴圈
+video.addEventListener("play", ()=>{
+  if(hasRVFC) video.requestVideoFrameCallback(onRVFC);
+  else { cancelAnimationFrame(rafId); rafId = requestAnimationFrame(onRAF); }
+});
+// 暫停 / 結束：frame index 停住（迴圈自然停止）
+video.addEventListener("pause", ()=> cancelAnimationFrame(rafId));
+video.addEventListener("ended", ()=> cancelAnimationFrame(rafId));
+// 拖曳進度：暫停狀態也要同步更新一張
+video.addEventListener("seeked", ()=>{ if(video.paused) renderOnce(); });
+
+// requestVideoFrameCallback 版本：metadata.mediaTime 是該 frame 的實際時間
+function onRVFC(now, metadata){
+  const t = metadata.mediaTime;
+  const frameIndex = Math.floor(t * fps) + 1;   // 規格：floor(currentTime*fps)+1
+  processFrame(frameIndex, t);
+  if(!video.paused && !video.ended) video.requestVideoFrameCallback(onRVFC);
+}
+// rAF 估算版本
+function onRAF(){
+  if(video.paused || video.ended) return;
+  const t = video.currentTime;
+  const frameIndex = Math.floor(t * fps) + 1;
+  processFrame(frameIndex, t);
+  rafId = requestAnimationFrame(onRAF);
+}
+// 暫停/拖曳時也要更新一張畫面與資料
+function renderOnce(){
+  const t = video.currentTime;
+  const frameIndex = Math.floor(t * fps) + 1;
+  processFrame(frameIndex, t);
+}
+
+// 單張 frame 的完整處理：偵測 → 角度 → 問題 → 畫面 → 面板 → 記錄
+function processFrame(frameIndex, time){
+  // 統計列
+  stTime.textContent  = (time||0).toFixed(2) + "s";
+  stFps.textContent   = fps;
+  stFrame.textContent = pad6(frameIndex);
+
+  let landmarks = null, detected = false;
+
+  // 真實偵測（未手動強制 Demo 時）
+  if(mpReady && landmarker && !forceDemo && video.videoWidth){
+    try{
+      let ts = Math.round(time * 1000);
+      if(ts <= lastTs) ts = lastTs + 1;   // detectForVideo 要求時間戳嚴格遞增
+      lastTs = ts;
+      const res = landmarker.detectForVideo(video, ts);
+      if(res && res.landmarks && res.landmarks.length){
+        const raw = res.landmarks[0];
+        landmarks = raw.map((p, idx)=>({
+          index: idx,
+          name:  LM_NAMES[idx] || ("pt"+idx),
+          x: round(p.x), y: round(p.y), z: round(p.z),
+          visibility: round(p.visibility != null ? p.visibility : 1)
+        }));
+        detected = landmarks.length > 0;
+      }
+    }catch(err){ /* 單張偵測失敗就跳過，不讓整頁壞掉 */ }
+  }
+
+  currentLandmarks = landmarks;
+  const angles = landmarks ? calculateFrameAngles(landmarks) : {};
+  const issues = landmarks ? detectKickIssues(landmarks, angles) : [];
+  currentIssues = issues;
+
+  drawFrame(frameIndex, time, landmarks, detected, issues);
+  updatePanel(frameIndex, time, landmarks, angles, issues, detected);
+  recordFrame(frameIndex, time, landmarks, angles, issues);
+}
+
+/* =====================================================================
+   4) Canvas 疊加：骨架點 + 骨架線 + frame index + 問題標籤
+===================================================================== */
+function drawFrame(frameIndex, time, landmarks, detected, issues){
+  const W = overlay.width, H = overlay.height;
+  ctx.clearRect(0,0,W,H);
+
+  // 匯出影片時把原始影片畫面也烤進 canvas（平常維持透明，疊在 video 上）
+  if(bakeVideo && video.readyState >= 2){
+    ctx.drawImage(video, 0, 0, W, H);
+  }
+
+  if(landmarks){
+    drawSkeleton(landmarks, W, H, false);
+  }else if(demoMode || forceDemo){
+    drawDemoSkeleton(W, H);   // 假骨架示意（清楚標示）
+  }
+
+  drawHud(frameIndex, !!landmarks, landmarks ? landmarks.length : 0, issues, (demoMode||forceDemo)&&!landmarks);
+}
+
+// 畫真實骨架
+function drawSkeleton(landmarks, W, H, isDemo){
+  const px = i => ({ x: landmarks[i].x * W, y: landmarks[i].y * H, v: landmarks[i].visibility });
+  // 連線
+  ctx.lineWidth = Math.max(3, W/220);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = isDemo ? "rgba(164,114,255,.9)" : "rgba(91,230,255,.95)";
+  ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
+  POSE_CONNECTIONS.forEach(([a,b])=>{
+    const A = px(a), B = px(b);
+    if((A.v!=null && A.v<0.3) || (B.v!=null && B.v<0.3)) return;
+    ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke();
+  });
+  ctx.shadowBlur = 0;
+  // 關鍵點
+  const r = Math.max(3, W/200);
+  landmarks.forEach(p=>{
+    if(p.visibility!=null && p.visibility<0.3) return;
+    ctx.beginPath(); ctx.arc(p.x*W, p.y*H, r, 0, Math.PI*2);
+    ctx.fillStyle = "#ffd166"; ctx.fill();
+  });
+}
+
+// 假骨架（Demo）：固定一個站姿示意，清楚標示非真實偵測
+function drawDemoSkeleton(W, H){
+  const cx = W*0.5, top = H*0.18, s = H*0.62;
+  const P = {
+    head:[cx, top], neck:[cx, top+s*0.12],
+    shL:[cx-s*0.16, top+s*0.14], shR:[cx+s*0.16, top+s*0.14],
+    elL:[cx-s*0.24, top+s*0.30], elR:[cx+s*0.24, top+s*0.28],
+    wrL:[cx-s*0.28, top+s*0.44], wrR:[cx+s*0.30, top+s*0.42],
+    hipL:[cx-s*0.10, top+s*0.46], hipR:[cx+s*0.10, top+s*0.46],
+    kneeL:[cx-s*0.12, top+s*0.70], kneeR:[cx+s*0.34, top+s*0.50],
+    ankL:[cx-s*0.13, top+s*0.92], ankR:[cx+s*0.52, top+s*0.46]
+  };
+  const lines=[["head","neck"],["neck","shL"],["neck","shR"],["shL","elL"],["elL","wrL"],
+    ["shR","elR"],["elR","wrR"],["neck","hipL"],["neck","hipR"],["hipL","hipR"],
+    ["hipL","kneeL"],["kneeL","ankL"],["hipR","kneeR"],["kneeR","ankR"]];
+  ctx.lineWidth=Math.max(3,W/220); ctx.lineCap="round";
+  ctx.strokeStyle="rgba(164,114,255,.9)"; ctx.shadowColor=ctx.strokeStyle; ctx.shadowBlur=8;
+  lines.forEach(([a,b])=>{ ctx.beginPath(); ctx.moveTo(P[a][0],P[a][1]); ctx.lineTo(P[b][0],P[b][1]); ctx.stroke(); });
+  ctx.shadowBlur=0;
+  Object.values(P).forEach(([x,y])=>{ ctx.beginPath(); ctx.arc(x,y,Math.max(3,W/200),0,Math.PI*2); ctx.fillStyle="#ffd166"; ctx.fill(); });
+}
+
+// HUD：frame index（大）、偵測狀態、關鍵點數、問題標籤
+function drawHud(frameIndex, detected, count, issues, isDemoSkel){
+  const W = overlay.width, pad = Math.max(12, W*0.02);
+  const fs = Math.max(20, W*0.045);
+  // Frame index（左上，很明顯）
+  ctx.font = `900 ${fs}px ui-monospace,Consolas,monospace`;
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "rgba(0,0,0,.45)";
+  ctx.fillRect(pad-6, pad-6, ctx.measureText("Frame "+pad6(frameIndex)).width+18, fs+14);
+  ctx.fillStyle = "#5be6ff";
+  ctx.fillText("Frame " + pad6(frameIndex), pad, pad);
+
+  // 偵測狀態
+  const fs2 = Math.max(13, W*0.024);
+  ctx.font = `700 ${fs2}px system-ui,"Microsoft JhengHei"`;
+  const statusText = isDemoSkel ? "Demo skeleton（非真實偵測）"
+                  : detected ? ("偵測成功 · 關鍵點 "+count)
+                  : "尚未偵測到人體骨架";
+  ctx.fillStyle = isDemoSkel ? "#c9a6ff" : detected ? "#46e6a8" : "#ff5d6c";
+  ctx.fillText(statusText, pad, pad + fs + 12);
+
+  // 問題標籤（醒目，紅底，右上往下排）
+  if(issues && issues.length){
+    const tfs = Math.max(14, W*0.026);
+    ctx.font = `800 ${tfs}px system-ui,"Microsoft JhengHei"`;
+    let y = pad;
+    issues.forEach(t=>{
+      const w = ctx.measureText(t).width + 20;
+      const x = W - pad - w;
+      ctx.fillStyle = "rgba(255,93,108,.92)";
+      roundRect(x, y, w, tfs+12, 8); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.fillText(t, x+10, y+6);
+      y += tfs + 18;
+    });
+  }
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+/* =====================================================================
+   5) 角度計算（預留給橫踢評分）
+===================================================================== */
+// 三點夾角：回傳 B 點的角度（度）。point = {x,y}
+function calculateAngle(A, B, C){
+  if(!A||!B||!C) return null;
+  const v1 = { x: A.x - B.x, y: A.y - B.y };
+  const v2 = { x: C.x - B.x, y: C.y - B.y };
+  const dot = v1.x*v2.x + v1.y*v2.y;
+  const m = Math.hypot(v1.x,v1.y) * Math.hypot(v2.x,v2.y) || 1e-6;
+  return Math.acos(Math.max(-1,Math.min(1, dot/m))) * 180 / Math.PI;
+}
+// 計算一張 frame 的基本角度。landmarks 為本程式的物件陣列（含 x,y）
+function calculateFrameAngles(landmarks){
+  // 以畫面比例校正 x（normalized x 是相對寬、y 相對高），讓角度不被長寬比扭曲
+  const W = overlay.width || 1, H = overlay.height || 1, asp = W / H;
+  const P = i => landmarks[i] ? { x: landmarks[i].x * asp, y: landmarks[i].y } : null;
+  const mid = (a,b)=> (a&&b) ? { x:(a.x+b.x)/2, y:(a.y+b.y)/2 } : null;
+
+  const leftKnee  = calculateAngle(P(I.hipL),  P(I.kneeL), P(I.ankL));
+  const rightKnee = calculateAngle(P(I.hipR),  P(I.kneeR), P(I.ankR));
+  const leftHip   = calculateAngle(P(I.shL),   P(I.hipL),  P(I.kneeL));
+  const rightHip  = calculateAngle(P(I.shR),   P(I.hipR),  P(I.kneeR));
+
+  // 軀幹傾斜：肩中心→髖中心 向量與垂直線的夾角
+  const shMid = mid(P(I.shL), P(I.shR)), hipMid = mid(P(I.hipL), P(I.hipR));
+  let trunkTilt = null;
+  if(shMid && hipMid){
+    const dx = shMid.x - hipMid.x, dy = shMid.y - hipMid.y;
+    trunkTilt = Math.abs(Math.atan2(dx, -dy)) * 180 / Math.PI; // 直立≈0
+  }
+  return {
+    leftKnee:  round(leftKnee,1),  rightKnee: round(rightKnee,1),
+    leftHip:   round(leftHip,1),   rightHip:  round(rightHip,1),
+    trunkTilt: round(trunkTilt,1)
+  };
+}
+
+/* =====================================================================
+   6) 橫踢問題判斷（第一版：示意用假規則，門檻待下一版以真實資料校正）
+===================================================================== */
+function detectKickIssues(landmarks, angles){
+  const issues = [];
+  // 判斷踢擊腳 = 腳踝抬最高（y 最小）那隻
+  const ankL = landmarks[I.ankL], ankR = landmarks[I.ankR];
+  const kneeL = landmarks[I.kneeL], kneeR = landmarks[I.kneeR];
+  const kickIsLeft = (ankL?.y ?? 1) <= (ankR?.y ?? 1);
+  const kickKneeAngle = kickIsLeft ? angles.leftKnee : angles.rightKnee;
+  const kickHipAngle  = kickIsLeft ? angles.leftHip  : angles.rightHip;
+  const kickAnkle = kickIsLeft ? ankL : ankR;
+  const kickKnee  = kickIsLeft ? kneeL : kneeR;
+
+  // 規則 1：膝蓋角度太小 → 收膝不足
+  if(kickKneeAngle != null && kickKneeAngle < 90) issues.push("收膝不足");
+  // 規則 2：髖角度不足 → 髖部旋轉不足
+  if(kickHipAngle != null && kickHipAngle < 60) issues.push("髖部旋轉不足");
+  // 規則 3：身體傾斜太大 → 身體後仰過多
+  if(angles.trunkTilt != null && angles.trunkTilt > 25) issues.push("身體後仰過多");
+  // 規則 4：腳踝高度低於膝蓋（y 較大＝畫面較低）→ 踢擊高度不足
+  if(kickAnkle && kickKnee && kickAnkle.y > kickKnee.y) issues.push("踢擊高度不足");
+
+  return issues;
+}
+
+/* =====================================================================
+   7) 目前 frame 骨架資料面板
+===================================================================== */
+function fmtPt(p){ return p ? `(${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${(p.z??0).toFixed(3)})` : "—"; }
+function updatePanel(frameIndex, time, landmarks, angles, issues, detected){
+  detectPill.className = "pill " + (detected ? "ok" : (demoMode||forceDemo ? "warn":"bad"));
+  detectPill.textContent = detected ? "偵測成功" : (demoMode||forceDemo ? "Demo 骨架" : "未偵測到人體");
+
+  dFrame.textContent = pad6(frameIndex);
+  dTime.textContent  = (time||0).toFixed(2) + "s";
+  dCount.textContent = landmarks ? landmarks.length : 0;
+
+  const g = i => landmarks ? landmarks[i] : null;
+  dLHip.textContent  = fmtPt(g(I.hipL));  dLKnee.textContent = fmtPt(g(I.kneeL)); dLAnkle.textContent = fmtPt(g(I.ankL));
+  dRHip.textContent  = fmtPt(g(I.hipR));  dRKnee.textContent = fmtPt(g(I.kneeR)); dRAnkle.textContent = fmtPt(g(I.ankR));
+
+  const A = v => (v==null?"—":v.toFixed(1)+"°");
+  aLKnee.textContent=A(angles.leftKnee); aRKnee.textContent=A(angles.rightKnee);
+  aLHip.textContent =A(angles.leftHip);  aRHip.textContent =A(angles.rightHip);
+  aTrunk.textContent=A(angles.trunkTilt);
+
+  if(!landmarks){ issueBox.innerHTML = `<span class="good-tag">${detected?"無":"尚無資料"}</span>`; }
+  else if(issues.length === 0){ issueBox.innerHTML = `<span class="good-tag">動作 OK（無明顯問題）</span>`; }
+  else { issueBox.innerHTML = issues.map(t=>`<span class="issue-tag">${t}</span>`).join(""); }
+}
+
+/* =====================================================================
+   8) 每 frame 骨架資料紀錄 frameDataList
+===================================================================== */
+function recordFrame(frameIndex, time, landmarks, angles, issues){
+  if(frameIndex === lastRecordedIndex) return;   // 連續播放：同 frame 不重複記
+  lastRecordedIndex = frameIndex;
+  frameDataList.push({
+    frameIndex,
+    time: round(time, 2),
+    fps,
+    landmarks: landmarks || [],
+    angles: angles || {},
+    score: null,     // 預留：下一版填入該 frame 的橫踢評分
+    issue: issues && issues.length ? issues.join("、") : null
+  });
+  updateRecPill();
+}
+function updateRecPill(){ recPill.textContent = "已記錄 " + frameDataList.length + " frames"; }
+
+/* =====================================================================
+   9) 匯出骨架 JSON
+===================================================================== */
+exportJsonBtn.addEventListener("click", ()=>{
+  if(frameDataList.length === 0){ alert("尚無骨架資料。請先播放影片讓系統逐 frame 取得骨架。"); return; }
+  const payload = {
+    videoName: videoName || "untitled",
+    fps,
+    duration: round(video.duration, 3),
+    totalFrames: Math.floor((video.duration||0) * fps),
+    frameDataList,
+    createdAt: new Date().toISOString()
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json;charset=utf-8" });
+  downloadBlob(blob, (videoName ? videoName.replace(/\.[^.]+$/,"") : "skeleton") + "-skeleton.json");
+});
+
+/* =====================================================================
+   10) 匯出帶骨架影片（canvas.captureStream + MediaRecorder → WebM）
+       不支援則提示先匯出 JSON
+===================================================================== */
+exportVideoBtn.addEventListener("click", async ()=>{
+  if(!overlay.captureStream || typeof MediaRecorder === "undefined"){
+    alert("此瀏覽器暫不支援影片匯出，可先匯出骨架 JSON。");
+    return;
+  }
+  // 選一個可用的 WebM 編碼
+  const mimeCandidates = ["video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"];
+  const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || "";
+  if(MediaRecorder.isTypeSupported && !mimeType){
+    alert("此瀏覽器暫不支援 WebM 影片匯出，可先匯出骨架 JSON。");
+    return;
+  }
+  try{
+    bakeVideo = true;                       // 把影片畫面也畫進 canvas，輸出才會含原始畫面
+    const stream = overlay.captureStream(Math.min(60, Math.max(15, fps)));
+    const chunks = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    recorder.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = ()=>{
+      bakeVideo = false;
+      const blob = new Blob(chunks, { type:"video/webm" });
+      downloadBlob(blob, (videoName ? videoName.replace(/\.[^.]+$/,"") : "taekwondo") + "-skeleton.webm");
+      exportVideoBtn.disabled = false; exportVideoBtn.textContent = "匯出帶骨架影片";
+    };
+
+    exportVideoBtn.disabled = true; exportVideoBtn.textContent = "錄製中…（播放整段）";
+    video.pause(); video.currentTime = 0;
+    await new Promise(r => video.addEventListener("seeked", r, { once:true }));
+    recorder.start();
+    await video.play();
+    // 影片播到結束就停止錄製
+    video.addEventListener("ended", ()=> { try{ recorder.state!=="inactive" && recorder.stop(); }catch(_){} }, { once:true });
+  }catch(err){
+    bakeVideo = false; exportVideoBtn.disabled = false; exportVideoBtn.textContent = "匯出帶骨架影片";
+    console.error(err);
+    alert("影片匯出失敗，可先匯出骨架 JSON。\n" + err);
+  }
+});
+
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+/* =====================================================================
+   11) Demo 骨架手動切換（教練展示用）
+===================================================================== */
+demoToggleBtn.addEventListener("click", ()=>{
+  forceDemo = !forceDemo;
+  demoToggleBtn.textContent = forceDemo ? "關閉 Demo 骨架" : "切換 Demo 骨架";
+  setMpStatus(forceDemo ? "warn" : (mpReady ? "ok":"bad"),
+              forceDemo ? "Demo 模式（手動）" : (mpReady ? "AI 模型已就緒（真實偵測）":"模型載入失敗 · Demo 模式"));
+  renderOnce();
+});
+
+/* 初始 FPS */
+fps = parseInt(fpsInput.value) || 30; stFps.textContent = fps;
+</script>
+
+<!--
+========================================================================
+  下一版：如何把每 frame 的骨架資料（frameDataList）轉成「跆拳道橫踢評分」
+========================================================================
+  目標 6 項分數：收膝高度、髖部旋轉、膝蓋伸展、支撐腳旋轉、身體平衡、收腳速度。
+
+  步驟建議：
+  1. 找關鍵影格（key frames）：
+     - 從 frameDataList 掃過整段，找「踢擊腳」= 腳踝 y 最小（抬最高）那隻。
+     - 收膝影格(chamber) = 踢擊腳「膝蓋 y 最小」的那張。
+     - 出腿影格(peak)    = 踢擊腳「腳踝 y 最小」的那張。
+
+  2. 尺度標準化（讓不同身高/站位可比）：
+     - 以「軀幹長」= 肩中心↔髖中心距離 當 1 單位，所有距離除以它。
+     - 以「髖中心」當原點；x 乘上畫面長寬比 aspect 校正。
+
+  3. 六項對應算法（用 angles 與 landmarks 即可）：
+     - 收膝高度  = 收膝影格中「髖中心.y − 踢擊膝.y」/ 軀幹長（越高越好）。
+     - 髖部旋轉  = 左右髖的 z 深度差 / 髖寬（越大代表轉體越多）。
+     - 膝蓋伸展  = 出腿影格的膝角（髖-膝-踝，越接近 180° 越伸展）→ 已可由 calculateFrameAngles 取得。
+     - 支撐腳旋轉 = 支撐腳腳尖相對腳跟的橫向位移 / 腳長。
+     - 身體平衡  = 出腿影格肩中心、髖中心對「支撐腳踝垂直線」的偏移 / 軀幹長（越小越穩）。
+     - 收腳速度  = peak 之後，踢擊腳踝逐 frame 位移 / 軀幹長 / Δt 的最大值（用 time 欄位算 Δt）。
+
+  4. 評分映射：每項用 mapScore(value, inLo, inHi, outLo, outHi) 線性映射到 40–99，
+     再把該 frame 或整段的分數寫回 frameDataList[i].score，並產生教練回饋文字。
+
+  5. 進階：多位教練示範錄成「標準範本」，每項記平均±容許帶；
+     學員 vs 標準用「定式對齊 + DTW（依 time 對齊時間軸）」比對，產生最終分數。
+========================================================================
+-->
+</body>
+</html>
