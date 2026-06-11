@@ -578,11 +578,23 @@ function detectKickIssues(landmarks, angles){
   // 判斷踢擊腳 = 腳踝抬最高（y 最小）那隻
   const ankL = landmarks[I.ankL], ankR = landmarks[I.ankR];
   const kneeL = landmarks[I.kneeL], kneeR = landmarks[I.kneeR];
+  const hipL  = landmarks[I.hipL],  hipR  = landmarks[I.hipR];
   const kickIsLeft = (ankL?.y ?? 1) <= (ankR?.y ?? 1);
   const kickKneeAngle = kickIsLeft ? angles.leftKnee : angles.rightKnee;
   const kickHipAngle  = kickIsLeft ? angles.leftHip  : angles.rightHip;
   const kickAnkle = kickIsLeft ? ankL : ankR;
   const kickKnee  = kickIsLeft ? kneeL : kneeR;
+  const kickHip   = kickIsLeft ? hipL : hipR;
+  const supAnkle  = kickIsLeft ? ankR : ankL;   // 支撐腳
+
+  // ── 踢擊偵測閘門 ──────────────────────────────
+  // 只有「踢擊腳真的抬起來」才算正在踢；站立/品勢/落地的 frame 不評踢擊問題。
+  // 條件：踢擊腳踝抬到接近髖或更高（y 較小）  或  明顯高過支撐腳（兩踝 y 差 > 0.15）。
+  // 註：門檻為示意值，下一版可用真實資料校正。
+  const liftedAboveHip = (kickAnkle && kickHip) ? (kickAnkle.y < kickHip.y) : false;
+  const higherThanSupport = (kickAnkle && supAnkle) ? ((supAnkle.y - kickAnkle.y) > 0.15) : false;
+  const isKicking = liftedAboveHip || higherThanSupport;
+  if(!isKicking) return issues;   // 沒在踢 → 不標任何踢擊類問題
 
   // 規則 1：膝蓋角度太小 → 收膝不足
   if(kickKneeAngle != null && kickKneeAngle < 90) issues.push("收膝不足");
