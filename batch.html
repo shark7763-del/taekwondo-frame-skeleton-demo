@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>品勢影片 → 標準範本｜批次骨架抽取</title>
+<!--
+  品勢影片批次骨架抽取器
+  一次選多支品勢 mp4 → 離線逐 frame 抽 MediaPipe 33 點骨架 → 15fps 降取樣
+  → 依檔名自動對應品勢章節 → 匯出可直接匯入 Taekwondo AI Coach 的標準範本 JSON
+  純前端單檔，骨架運算只在本機瀏覽器，不上傳。
+-->
+<style>
+  :root{--bg:#070d18;--card:#0f1c30;--line:rgba(96,180,255,.24);--text:#eef5ff;--muted:#9fb3c8;
+    --cyan:#5be6ff;--blue:#4cc9f0;--green:#46e6a8;--yellow:#ffd166;--red:#ff5d6c;--radius:16px}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans TC","Microsoft JhengHei",system-ui,Arial,sans-serif;color:var(--text);
+    min-height:100vh;padding:18px;background:
+    radial-gradient(1000px 480px at 8% -10%,rgba(76,201,240,.16),transparent 60%),
+    radial-gradient(900px 480px at 108% 0,rgba(164,114,255,.15),transparent 55%),linear-gradient(180deg,#05080f,var(--bg))}
+  .wrap{max-width:880px;margin:0 auto}
+  h1{font-size:24px;margin:6px 0 4px;letter-spacing:-.3px}
+  .sub{color:var(--muted);font-size:14px;margin:0 0 16px}
+  .card{background:linear-gradient(180deg,var(--card),#0a1626);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  .pill{font-size:12px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill.ok{color:var(--green);border-color:rgba(70,230,168,.4);background:rgba(70,230,168,.08)}
+  .pill.warn{color:var(--yellow);border-color:rgba(255,209,102,.4);background:rgba(255,209,102,.08)}
+  .pill.busy{color:var(--cyan);border-color:rgba(91,230,255,.4);background:rgba(91,230,255,.08)}
+  button{border:none;border-radius:13px;padding:14px 16px;font-weight:800;font-size:15px;color:#06111f;cursor:pointer;transition:filter .15s,transform .1s;width:100%}
+  button:active{transform:scale(.99)} button:hover{filter:brightness(1.08)} button:disabled{opacity:.45;cursor:not-allowed}
+  .btn-cyan{background:linear-gradient(135deg,var(--cyan),var(--blue))}
+  .btn-green{background:linear-gradient(135deg,var(--green),#8affd6)}
+  .btn-ghost{background:rgba(255,255,255,.08);color:var(--text);border:1px solid var(--line)}
+  input[type=file]{display:none}
+  .file-btn{display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--cyan),var(--blue));border-radius:13px;padding:14px 16px;font-weight:800;color:#06111f;cursor:pointer}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+  .bar{height:10px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;border:1px solid rgba(255,255,255,.08);margin-top:8px}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--blue),var(--green));transition:width .2s}
+  .list{display:grid;gap:8px}
+  .it{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:12px;padding:11px 13px}
+  .it .nm{font-weight:700;font-size:14px}
+  .it .meta{font-size:12px;color:var(--muted);margin-top:3px}
+  .it .st{font-size:12.5px;font-weight:800;white-space:nowrap}
+  .st.wait{color:var(--muted)} .st.run{color:var(--cyan)} .st.done{color:var(--green)} .st.bad{color:var(--red)}
+  .mini{color:var(--muted);font-size:12px;line-height:1.6}
+  canvas{display:none}
+  .note{border-left:3px solid var(--yellow);background:rgba(255,209,102,.06);padding:11px 13px;border-radius:8px;font-size:13px;color:#ffe9b8;margin-top:10px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>品勢影片 → 標準範本</h1>
+  <p class="sub">批次把品勢 mp4 抽成骨架範本，匯入 Taekwondo AI Coach 當對照組</p>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px">
+      <b>① 選影片</b><span class="pill busy" id="mpStatus">AI 模型載入中…</span>
+    </div>
+    <label class="file-btn" style="width:100%">選擇品勢影片（可多選 mp4）
+      <input type="file" id="files" accept="video/mp4,video/webm,video/*" multiple />
+    </label>
+    <div class="row">
+      <div class="mini">取樣 FPS：<b id="fpsLab">15</b>　關鍵點：<b>33</b></div>
+      <div class="mini" style="text-align:right">已選：<b id="cntLab">0</b> 支</div>
+    </div>
+    <div class="note">影片要求：<b>全程單人、全身入鏡、機位固定、無剪接/多角度</b>，骨架才抓得準。檔名（如 <b>太極一章.mp4</b>）會自動對應品勢章節。</div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <b>② 開始抽取</b><span class="pill" id="overallPill">尚未開始</span>
+    </div>
+    <button class="btn-cyan" id="runBtn" disabled>開始批次抽骨架</button>
+    <div class="bar"><i id="overallBar"></i></div>
+    <div class="mini" id="overallTxt" style="margin-top:8px">選好影片後按開始。整批處理可能需要數分鐘（每支約 30–90 秒）。</div>
+    <div class="list" id="list" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b>③ 匯出範本</b><span class="pill" id="resultPill">尚無結果</span>
+    </div>
+    <button class="btn-green" id="exportBtn" disabled>匯出全部範本（一個 JSON）</button>
+    <div class="mini" style="margin-top:10px">匯出後 → 開 Taekwondo AI Coach（index-poomsae-v1.html）→「動作錄製」分頁 →「匯入 JSON」→ 選這個檔，全部型就一次變成標準範本。</div>
+  </div>
+
+  <p class="mini" style="text-align:center">純前端 · 骨架只在本機運算不上傳 · 建議桌機 Chrome/Edge</p>
+</div>
+
+<canvas id="cv" width="640" height="480"></canvas>
+
+<script type="module">
+const $=id=>document.getElementById(id);
+const filesInput=$("files"), runBtn=$("runBtn"), exportBtn=$("exportBtn");
+const listEl=$("list"), mpStatus=$("mpStatus"), overallPill=$("overallPill"), overallBar=$("overallBar"), overallTxt=$("overallTxt"), resultPill=$("resultPill");
+const cntLab=$("cntLab");
+
+const FPS=15;
+const r3=v=>v==null?0:Math.round(v*1000)/1000, r2=v=>v==null?1:Math.round(v*100)/100;
+let landmarker=null, mpReady=false, files=[], results=[], running=false, globalBase=0;
+
+/* 檔名 → 品勢類型 + 名稱 */
+function mapType(filename){
+  const base=filename.replace(/\.[^.]+$/,"");
+  const num={"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8};
+  const m=base.match(/太極([一二三四五六七八])章/);
+  if(m) return {poomsaeType:"taegeuk_"+num[m[1]], name:base+"-標準"};
+  return {poomsaeType:"other", name:base+"-標準"};
+}
+
+/* 初始化 MediaPipe Tasks Vision PoseLandmarker（VIDEO 模式） */
+async function initMP(){
+  try{
+    const vision=await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+    const {PoseLandmarker,FilesetResolver}=vision;
+    const fileset=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const model="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+    const opt=d=>({baseOptions:{modelAssetPath:model,delegate:d},runningMode:"VIDEO",numPoses:1,minPoseDetectionConfidence:.5,minTrackingConfidence:.5});
+    try{ landmarker=await PoseLandmarker.createFromOptions(fileset,opt("GPU")); }
+    catch(e){ landmarker=await PoseLandmarker.createFromOptions(fileset,opt("CPU")); }
+    mpReady=true; mpStatus.className="pill ok"; mpStatus.textContent="AI 模型已就緒";
+    refreshRunBtn();
+  }catch(e){ console.error(e); mpStatus.className="pill warn"; mpStatus.textContent="模型載入失敗（需網路）"; }
+}
+initMP();
+
+filesInput.addEventListener("change",e=>{
+  files=[...e.target.files].filter(f=>f.type.startsWith("video")||/\.(mp4|webm|mov|m4v)$/i.test(f.name));
+  cntLab.textContent=files.length;
+  results=[]; exportBtn.disabled=true; resultPill.textContent="尚無結果"; resultPill.className="pill";
+  renderList(files.map(f=>({name:f.name,status:"wait"})));
+  refreshRunBtn();
+});
+function refreshRunBtn(){ runBtn.disabled=!(mpReady&&files.length&&!running); }
+
+function renderList(rows){
+  listEl.innerHTML=rows.map((r,i)=>{
+    const t=mapType(r.name);
+    const stc={wait:"等待中",run:"處理中…",done:"完成",bad:"無有效骨架"}[r.status]||r.status;
+    return `<div class="it"><div><div class="nm">${r.name}</div>
+      <div class="meta">→ ${t.name}${r.detail?(" · "+r.detail):""}</div></div>
+      <div class="st ${r.status}" id="st-${i}">${stc}</div></div>`;
+  }).join("");
+}
+
+/* 逐 frame 定位（seek）後偵測 */
+function seek(v,t){return new Promise(res=>{const done=()=>{v.removeEventListener("seeked",done);res();};v.addEventListener("seeked",done);v.currentTime=Math.min(t,Math.max(0,v.duration-0.001));});}
+
+async function processVideo(file,idx,rows){
+  rows[idx].status="run"; renderList(rows);
+  const url=URL.createObjectURL(file);
+  const v=document.createElement("video"); v.muted=true; v.playsInline=true; v.preload="auto"; v.src=url;
+  await new Promise((res,rej)=>{v.onloadedmetadata=()=>res(); v.onerror=()=>rej("影片載入失敗");});
+  const W=v.videoWidth||640,H=v.videoHeight||480,dur=v.duration||0;
+  const step=1/FPS, frames=[]; const total=Math.max(1,Math.floor(dur/step));
+  let k=0;
+  for(let t=0;t<dur;t+=step){
+    await seek(v,t);
+    let ts=globalBase+Math.round(t*1000);
+    try{
+      const res=landmarker.detectForVideo(v,ts);
+      if(res&&res.landmarks&&res.landmarks.length){
+        frames.push({t:Math.round(t*1000),lm:res.landmarks[0].slice(0,33).map(p=>[r3(p.x),r3(p.y),r3(p.z),r2(p.visibility)])});
+      }
+    }catch(e){/* 單格略過 */}
+    k++;
+    if(k%5===0){ const fp=k/total; setFileProgress(idx,fp,frames.length); await new Promise(r=>setTimeout(r,0)); }
+  }
+  globalBase+=Math.round(dur*1000)+1000;
+  URL.revokeObjectURL(url);
+
+  const t=mapType(file.name);
+  const rec={ id:"rec_"+Date.now()+"_"+idx, schemaVersion:1,
+    meta:{ name:t.name, poomsaeType:t.poomsaeType, createdAt:new Date().toISOString(), isTemplate:true,
+      demonstrator:"影片示範", note:"批次匯入("+file.name+")", fps:FPS, frameCount:frames.length,
+      durationMs:frames.length?frames[frames.length-1].t:0, video:{width:W,height:H,aspect:+(W/H).toFixed(3)},
+      encoding:{decimals:3,hasZ:true,visQuant:2} },
+    summary:null, frames };
+  rows[idx].status=frames.length>=10?"done":"bad";
+  rows[idx].detail=`${frames.length} 格 / ${dur.toFixed(1)}s`;
+  renderList(rows);
+  return frames.length>=10?rec:null;
+}
+function setFileProgress(idx,fp,nframes){
+  const el=$("st-"+idx); if(el){el.textContent=Math.round(fp*100)+"%（"+nframes+"格）"; el.className="st run";}
+  const overall=(idx+fp)/files.length;
+  overallBar.style.width=Math.round(overall*100)+"%";
+  overallTxt.textContent=`處理第 ${idx+1}/${files.length} 支…`;
+}
+
+runBtn.addEventListener("click",async()=>{
+  if(!mpReady||!files.length||running) return;
+  running=true; runBtn.disabled=true; exportBtn.disabled=true; globalBase=0; results=[];
+  overallPill.className="pill busy"; overallPill.textContent="處理中";
+  const rows=files.map(f=>({name:f.name,status:"wait"})); renderList(rows);
+  for(let i=0;i<files.length;i++){
+    try{ const rec=await processVideo(files[i],i,rows); if(rec)results.push(rec); }
+    catch(e){ rows[i].status="bad"; rows[i].detail=String(e); renderList(rows); }
+  }
+  overallBar.style.width="100%"; overallPill.className="pill ok"; overallPill.textContent="完成";
+  overallTxt.textContent=`完成 ${results.length}/${files.length} 支（有效骨架）。`;
+  running=false; refreshRunBtn();
+  if(results.length){ exportBtn.disabled=false; resultPill.className="pill ok"; resultPill.textContent=results.length+" 支可匯出"; }
+  else { resultPill.className="pill warn"; resultPill.textContent="全部無有效骨架"; }
+});
+
+exportBtn.addEventListener("click",()=>{
+  if(!results.length) return;
+  const blob=new Blob([JSON.stringify(results)],{type:"application/json;charset=utf-8"});
+  const u=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=u; a.download="poomsae-templates-all.json"; a.click(); URL.revokeObjectURL(u);
+});
+</script>
+</body>
+</html>
